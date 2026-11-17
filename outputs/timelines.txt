@@ -1,0 +1,43 @@
+Question 5: Storm-0558 and the Exchange Online intrusion
+  date        +days  total  event
+  2023-05-15      0      0  Storm-0558 gains access to email accounts (CSRB)
+  2023-06-15     31     31  State's SOC detects anomalous mailbox access (CSRB)
+  2023-06-16      1     32  'Big Yellow Taxi' alerts; State notifies Microsoft (CSRB)
+  2023-06-26     10     42  Microsoft finds a consumer key forged the tokens (CSRB)
+  2023-06-29      3     45  Microsoft replaces the MSA signing keys (Microsoft blog)
+  2023-07-11     12     57  Microsoft's first public disclosure (MSRC blog)
+  2023-07-12      1     58  CISA/FBI advisory AA23-193A on detecting the activity
+  2023-09-06     56    114  Microsoft blames a 2021 crash dump for the key theft (blog)
+  2024-03-12    188    302  Microsoft corrects it: no crash dump with the key found
+  2024-03-20      8    310  CSRB report on the Exchange Online intrusion is dated
+
+selected intervals (Question 5)
+  intrusion start to detection: 2023-05-15 -> 2023-06-15 = 31 days (0.08 years)
+  detection to public disclosure: 2023-06-15 -> 2023-07-11 = 26 days (0.07 years)
+  inaccurate blog to its correction: 2023-09-06 -> 2024-03-12 = 188 days (0.51 years)
+
+Question 6: the xz backdoor
+  date        +days  total  event
+  2021-10-29      0      0  first contribution by 'Jia Tan' (an .editorconfig patch)
+  2022-04-22    175    175  first pressure e-mail to the maintainer (Jigar Kumar)
+  2022-06-10     49    224  first commit with 'Jia Tan' as author
+  2022-06-29     19    243  Collin: Jia is 'practically a co-maintainer already'
+  2022-10-28    121    364  Jia Tan joins the Tukaani GitHub organisation
+  2022-12-30     63    427  Jia Tan merges commits directly into the xz repo
+  2023-03-18     78    505  Jia Tan tags the first own release, v5.4.2
+  2024-02-23    342    847  backdoor code merged into binary test files
+  2024-02-24      1    848  v5.6.0 released; tarball has the malicious build-to-host.m4
+  2024-03-09     14    862  v5.6.1 released
+  2024-03-28     19    881  Freund finds the backdoor, tells Debian and distros@openwall
+  2024-03-29      1    882  disclosure on oss-security; CVE-2024-3094
+
+selected intervals (Question 6)
+  first contribution to disclosure: 2021-10-29 -> 2024-03-29 = 882 days (2.41 years)
+  first contribution to co-maintainer status: 2021-10-29 -> 2022-06-29 = 243 days (0.67 years)
+  first own release to backdoored release: 2023-03-18 -> 2024-02-24 = 343 days (0.94 years)
+  backdoored v5.6.0 release to disclosure: 2024-02-24 -> 2024-03-29 = 34 days (0.09 years)
+
+exposure of the distributions that shipped the backdoored xz (dates from their announcements)
+  openSUSE Tumbleweed and MicroOS: 2024-03-07 -> 2024-03-28 = 21 days (0.06 years)
+  Debian unstable: 2024-02-26 -> 2024-03-28 = 31 days (0.08 years)
+  Kali: 2024-03-26 -> 2024-03-29 = 3 days (0.01 years)

@@ -1,0 +1,24 @@
+inputs: peak = 201,000,000 requests/s, previous record = 71,000,000 requests/s, bots = 20,000,
+        cancelled request = 60 B, normal response = 20,000 B (1 kB = 1000 B), 1 bit = 1/8 B
+
+(a) record factor
+  peak / previous record = 201,000,000 / 71,000,000 = 2.831x
+  (Cloudflare writes 'nearly 3x'; the exact ratio is 2.83, i.e. +183%)
+
+(c) calculation
+  (i)   requests per second per bot = 201,000,000 / 20,000 = 10,050 requests/s
+  (ii)  total attack bandwidth = 201,000,000 x 60 B x 8 = 96.48 Gbit/s
+        per bot = 4.824 Mbit/s
+        cross-check, per bot x bots: 4.824 Mbit/s x 20,000 = 96.48 Gbit/s
+  (iii) bandwidth to receive every response = 201,000,000 x 20,000 B x 8 = 32.16 Tbit/s
+        per bot = 1.608 Gbit/s
+        cross-check, per bot x bots: 1.608 Gbit/s x 20,000 = 32.16 Tbit/s
+  ratio (iii)/(ii) = 20000/60 = 333.3  (the same for the total and for each bot)
+
+(b) why cancelling defeats the stream limit: HTTP/2 stream accounting on one connection
+  SETTINGS_MAX_CONCURRENT_STREAMS = 100; round-trip time = 50 ms
+  Only streams in the states open or half-closed count towards the limit (RFC 9113, 5.1.2).
+  ordinary client (waits for the response)   requests in 1 s:  2,000   max counted: 100
+  rapid reset (HEADERS + RST_STREAM)         requests in 1 s: 10,050   max counted: 1
+  closed form for the ordinary client: limit / RTT = 100 / 0.05 = 2,000 requests/s
+  closed form for rapid reset: uplink / bits per request = 4,824,000 / 480 = 10,050 requests/s

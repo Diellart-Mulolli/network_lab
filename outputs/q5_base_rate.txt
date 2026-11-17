@@ -1,0 +1,29 @@
+events per day N = 50,000,000; p = 1e-06; TPR = 0.95; FPR = 0.001; capacity = 60 alerts per
+    analyst per day
+
+method 1: expected counts per day
+  malicious events         N*p          = 50.0
+  benign events            N*(1-p)      = 49,999,950.00
+  true alerts              N*p*TPR      = 47.50
+  false alerts             N*(1-p)*FPR  = 49,999.95
+  alerts per day                        = 50,047.45
+  P(attack | alert) = 47.50 / 50,047.45 = 0.000949 = 0.0949 %  (one alert in 1,054 is real)
+  analysts = 50,047.45 / 60 = 834.12 -> 835 analysts
+
+method 2: Bayes' formula  P = TPR*p / (TPR*p + FPR*(1-p))
+  P(attack | alert) = 0.000949   (difference to method 1: 0.0e+00)
+  share of alerts that are false = 99.9051 %
+
+sensitivity: precision and analysts as the false positive rate falls (TPR kept at 0.95)
+       FPR   alerts/day  P(attack|alert)  analysts
+     1e-02      500,047         0.000095      8335
+     1e-03       50,047         0.000949       835
+     1e-04        5,047         0.009411        85
+     1e-05          547         0.086758        10
+     1e-06           97         0.487180         2
+
+narrow rule (assumed values for illustration, not taken from the incident):
+  a rule for one pattern only, e.g. mailbox access by an application ID not seen before
+  TPR = 0.6 (misses many attacks), FPR = 1e-06
+  alerts per day = 30.0 true + 50.0 false = 80.0;  P(attack | alert) = 0.375;  analysts = 2
+  compared with the general rule: 50,047 alerts/day, precision 0.0009, 835 analysts

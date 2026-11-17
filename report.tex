@@ -1,0 +1,640 @@
+\documentclass[11pt,a4paper]{article}
+
+% Network Security Incidents laboratory - student report (pdfLaTeX / Overleaf / Tectonic).
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=2.1cm]{geometry}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{float}
+\usepackage{graphicx}
+\usepackage{needspace}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{fancyvrb}
+\usepackage{cite}
+\renewcommand{\citepunct}{], [}
+\renewcommand{\citedash}{]--[}
+\usepackage{xurl}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!60!black, citecolor=blue!50!black,
+  pdftitle={Network Security Incidents: An Investigation Laboratory}, pdfauthor={Diellart Mulolli}}
+\setlist{itemsep=0.2em, topsep=0.3em}
+\setlength{\emergencystretch}{2em}
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\textbf{Network Security Incidents: An Investigation Laboratory}\\[0.3em]
+\large HTTP/2 Rapid Reset, Operation RoundPress, Storm-0558 and the xz backdoor}
+\author{Diellart Mulolli (230756200035)\\[0.2em] \small Code and LaTeX source: \url{https://github.com/Diellart-Mulolli/network_lab}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section*{Introduction}
+Network security failures rarely come from broken mathematics. They come from a protocol feature that costs the
+attacker almost nothing (a cancelled request), from a sanitiser that misses one attribute (an e-mail that runs
+script), from a signing key that lives too long, or from a build script that nobody read. This laboratory
+investigates four real incidents from 2023--2025, one for each segment of the laboratory sheet. For every incident
+the report identifies the people and products involved from primary sources (vendor and agency posts, a government
+review, the original mailing-list post, CVE records), builds a dated timeline, explains the mechanism with the
+protocol-level concepts of the course (Stamp, chs.~8--9 \cite{stamp}), and does the required calculations.
+
+\paragraph{Choice of cases.} The sheet has four segments with six cases. Where a segment offers two cases, one
+was chosen; where it offers one, that one is answered (Table~\ref{tab:cases}).
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}P{3.1cm}P{3.5cm}P{2.6cm}L@{}}
+\toprule
+Segment & Cases offered & Chosen & Reason \\
+\midrule
+2.1 Routing and denial of service & Q1 RPKI account hijack (Jan 2024); Q2 HTTP/2 Rapid Reset (2023) & \textbf{Question 2} &
+all numbers are in public vendor posts and the CVE record, and the question has a calculation; Q1 needs live
+RIPEstat look-ups with dated screenshots \\
+2.2 Web applications & Q3 Operation RoundPress & \textbf{Question 3} & the only case in the segment \\
+2.3 Firewalls and intrusion detection & Q4 firewall as entry point; Q5 forged key and custom alert &
+\textbf{Question 5} & a government review gives the detection details, and the question has a base-rate
+calculation; Q4 needs a hand-drawn network \\
+2.4 Authentication protocols & Q6 backdoor in SSH & \textbf{Question 6} & the only case in the segment \\
+\bottomrule
+\end{tabularx}
+\caption{Which case was answered in each segment.}\label{tab:cases}
+\end{table}
+
+\paragraph{Method.} The facts were collected from primary sources on the web. Every source is cited by number and listed
+with its URL in the reference list (the links are clickable in the PDF); the file \code{SOURCES.md} of the repository lists,
+for each source, the facts that were taken from it. The calculations and the date arithmetic are in three small Python
+scripts (Appendices~A.1--A.3) whose output is printed verbatim. The code, the LaTeX source and a running guide are in
+\url{https://github.com/Diellart-Mulolli/network_lab}. One limit: the by-hand drawing of Question~6(b) has to be a
+photograph of a real drawing, so Figure~\ref{fig:xz} is a marked place for it.
+
+%=====================================================================
+\section*{2.1 Routing and Denial of Service}
+
+\subsection*{Question 2 --- Open, cancel, repeat: HTTP/2 Rapid Reset (August--October 2023)}
+
+\paragraph{(a) Providers, dates, peaks, and the CVE.} On 10 October 2023 Cloudflare, Google and Amazon Web Services
+jointly disclosed a flaw in the HTTP/2 protocol that had been used for record request floods since late August.
+The flaw is tracked as CVE-2023-44487 (CVSS~v3 7.5, High; published 10~Oct.\ 2023) \cite{nvd}.
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}P{2.3cm}P{4.4cm}P{3.2cm}L@{}}
+\toprule
+Provider & First observation & Peak (requests/s) & Own technical post \\
+\midrule
+Cloudflare & 25 Aug.\ 2023 (``unusually big HTTP attacks'') & 201 million & \cite{cfzero,cftech} \\
+Google & ``August'' 2023; the wave started in late August (no day given) & 398 million & \cite{googlehow,google398} \\
+Amazon Web Services & ``late August 2023''; spike on CloudFront seen 28--29 Aug. & 155 million & \cite{aws} \\
+\bottomrule
+\end{tabularx}
+\caption{The three providers' own figures. All three posts are dated 10 October 2023.}\label{tab:providers}
+\end{table}
+Cloudflare also reports the botnet and its own previous record: the 201 million requests per second came from
+``roughly 20\,000 machines'' \cite{cfzero}, and its previous record was 71 million requests per second
+(February 2023) \cite{cf71}. The record was therefore exceeded by the factor
+$201/71 = 2.83$ (Appendix~A.1); Cloudflare itself rounds this to ``nearly 3x''. The 71 million had in turn beaten the
+46 million reported in June 2022 by more than 54\% \cite{cf71}.
+
+\paragraph{(b) The attack at the level of HTTP/2 frames.} HTTP/2 carries many parallel \emph{streams} over one TCP
+connection (Stamp, ch.~8 \cite{stamp}). To open a request the client sends a \textbf{HEADERS} frame (here with the
+END\_STREAM flag, so the request is complete); to cancel it, it sends a \textbf{RST\_STREAM} frame, which puts the
+stream into the \emph{closed} state at once \cite{cftech,rfc9113}. The server's limit,
+\code{SETTINGS\_MAX\_CONCURRENT\_STREAMS} (commonly 100), counts only streams in the \emph{open} or
+\emph{half-closed} state \cite{rfc9113}. Because a reset stream is closed, ``it instantly gets the ability to open another
+stream in its place'' \cite{cftech}: the limit is never reached, and the client no longer has to wait one round trip for
+each batch of 100 responses. The simulation of Appendix~A.1 shows this on one connection (50\,ms round-trip time,
+limit 100): an ordinary client is capped at $100/0.05=2000$ requests/s with 100 streams counted, whereas rapid reset
+sends 10\,050 requests/s over a 4.8\,Mbit/s uplink and never has more than one stream counted.
+
+The server still does the work of each cancelled request: it allocates the stream, decodes the headers (the HPACK
+state must be kept in step), maps the URL to a resource, and a reverse proxy may already have forwarded the request to a
+backend before the reset arrives \cite{googlehow}. The attacker pays 60 bytes; the victim pays for a request.
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}P{2.6cm}LL@{}}
+\toprule
+ & SYN flood & HTTP/2 Rapid Reset \\
+\midrule
+What is sent & TCP SYN segments, never completed & complete TCP and TLS connections, then HEADERS + RST\_STREAM \\
+Resource exhausted & the table of half-open TCP connections (kernel state) & CPU and memory of the HTTP server or proxy, and the
+backends behind it \\
+Spoofed addresses? & usual: the SYN-ACK need not return to the sender & not possible: the TLS handshake needs the
+replies, so the bots send from their real addresses \\
+\bottomrule
+\end{tabularx}
+\caption{A SYN flood compared with Rapid Reset.}\label{tab:synvsrr}
+\end{table}
+Rapid Reset therefore needs no spoofing; its small cost comes from the protocol, and a botnet of only 20\,000 real
+machines sufficed.
+
+\paragraph{(c) Calculation.} With 201 million requests/s, 20\,000 bots, 60 bytes per cancelled request and a
+20\,kB (20\,000-byte) normal response (all values computed by \code{q2\_rapid\_reset.py}, Appendix~A.1):
+\begin{table}[H]
+\centering\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Quantity & Total & Per bot \\
+\midrule
+(i) requests per second & $201\times10^{6}$ & $201\times10^{6}/20\,000 = 10\,050$ \\
+(ii) attack bandwidth, $60\cdot8$ bit per request & $96.48$\,Gbit/s & $4.824$\,Mbit/s \\
+(iii) bandwidth to receive every response, $20\,000\cdot8$ bit & $32.16$\,Tbit/s & $1.608$\,Gbit/s \\
+\bottomrule
+\end{tabular}
+\caption{Requests per second and bandwidth of the record attack.}
+\end{table}
+The responses would need $20\,000/60\approx333$ times as much bandwidth as the requests: 32\,Tbit/s in total, 1.6\,Gbit/s
+for each bot, which an ordinary infected machine does not have. Cancelling is the key because the cancelled request
+produces no response, so the attacker's downlink is never used; the botnet needs only about 5\,Mbit/s per machine, which
+is also why Google notes that the rate is limited by bandwidth, not by round-trip time \cite{googlehow}.
+
+\paragraph{(d) How one library was patched, and why a lower stream limit is not the fix.} The Go standard library
+(\code{net/http}) and \code{golang.org/x/net/http2} were fixed in Go~1.20.10 and Go~1.21.3 and in
+\code{x/net}~v0.17.0 (CVE-2023-39325, an alias of CVE-2023-44487) \cite{godb}. The change: the server caps the number of
+\emph{concurrently executing handler goroutines} at \code{MaxConcurrentStreams} (default 250 in \code{x/net/http2}). A reset
+no longer frees a slot for a new request while the old handler is still running; further requests wait in a queue
+until a handler ends, and the connection is closed if the queue grows too large \cite{godb}. The limit now measures the
+work being done, not just the streams still open.
+
+Simply lowering \code{SETTINGS\_MAX\_CONCURRENT\_STREAMS} does not help, for two reasons. First, cancelling frees the slot
+anyway, so the attacker is not bound by any value (Cloudflare: stream concurrency ``on its own cannot mitigate rapid
+reset'') \cite{cftech}. Second, it hurts legitimate clients: Cloudflare lowered the limit to 64 during the attacks, but
+many clients assume 100 streams and do not wait for the server's SETTINGS frame, so their surplus streams were reset,
+tripped Cloudflare's own counting mitigations, closed connections and caused complete page-load failures; the limit
+went back to 100 \cite{cftech}. What worked instead is watching the cancellation rate per connection and closing
+abusive connections \cite{googlehow}.
+
+%=====================================================================
+\section*{2.2 Web Applications}
+
+\subsection*{Question 3 --- Reading an e-mail is enough: Operation RoundPress (2023--2024)}
+
+\paragraph{(a) The report, the actor, the targets, the products.} The research was published on 15~May~2025 by ESET
+Research (author Matthieu Faou) under the title \emph{Operation RoundPress targeting high-value webmail servers}
+\cite{eset}. ESET attributes it to \textbf{Sednit} (also known as APT28, Fancy Bear, Forest Blizzard) with
+\textbf{medium confidence}, based on a spearphishing sender address resembling earlier Sednit campaigns and
+infrastructure shared with attributed servers \cite{eset}. Most victims are governmental entities and defence
+companies in Eastern Europe. The 2024 victims listed by ESET are in eight countries: Ukraine (the most:
+government, military and defence companies, a civil air carrier, a state transport company), Bulgaria and Romania
+(defence companies, a telecom for the defence sector), Greece, Serbia and Cameroon (governments), Ecuador (military)
+and Cyprus (an academic) \cite{eset}. The earliest documented activity is a spearphishing e-mail detected on
+29~September~2023; in 2023 only Roundcube was targeted, and the operation widened to other products in 2024 \cite{eset}.
+\begin{table}[H]
+\centering\footnotesize
+\begin{tabularx}{\textwidth}{@{}P{1.55cm}P{3.9cm}P{2.0cm}P{2.4cm}L@{}}
+\toprule
+Product & CVE & Used by Sednit in & Zero-day then? & Note \\
+\midrule
+Roundcube & CVE-2020-35730 (NVD: 28~Dec.\ 2020) and CVE-2023-43770 (NVD: 22~Sep.\ 2023) & 2023 and 2024 &
+no: known and patched (the newer flaw on 14~Sep.\ 2023) & XSS in the handling of link text in plain-text mails \cite{eset,nvd} \\
+Horde & none identified & 2024 & no: an old, fixed XSS (Horde Webmail~1.0) & exploit probably did not work \cite{eset} \\
+MDaemon & CVE-2024-11182 (NVD: 15~Nov.\ 2024) & 2024 (detected 1~Nov.) & \textbf{yes}: reported to the vendor, fixed in 24.5.1 on
+14~Nov.\ 2024 & XSS through an \code{img} element and an HTML parser quirk \cite{eset,nvd} \\
+Zimbra & CVE-2024-27443 (NVD: 12~Aug.\ 2024) & 2024 & no: known and patched on 1~Mar.\ 2024 &
+XSS through the calendar header \code{X-Zimbra-Calendar-\allowbreak Intended-For} \cite{eset,nvd} \\
+\bottomrule
+\end{tabularx}
+\caption{Webmail products attacked, from ESET's report. All four NVD records have CVSS v3 base score 6.1 (medium).}\label{tab:webmail}
+\end{table}
+
+\paragraph{(b) Why viewing an e-mail runs the attacker's JavaScript.} A webmail application turns the HTML of a message
+into part of its own web page. If its sanitiser leaves one dangerous construct, the browser executes it as script of
+the webmail origin: unsanitised link text in Roundcube, the \code{cif} attribute taken from a calendar header in Zimbra,
+an \code{img} element revived by a parser quirk in MDaemon, an \code{onerror} attribute in Horde \cite{eset}. This is
+\textbf{stored} (persistent) XSS: the script is part of a message that the server keeps in the victim's mailbox and it
+runs whenever the message is rendered. Reflected XSS would need the victim to follow a crafted link whose parameter is
+echoed back by the server; here the e-mail itself is the delivery vehicle. (ESET does not use either term; the
+classification follows the definition in the course sheet.)
+
+XSS inside a webmail client is especially powerful. The script runs with the origin and session of the user's
+\emph{mailbox}, so it can call the application's own interfaces: read every folder and the address book, change
+settings and filters, create credentials. The page holds the most sensitive data a person has (password-reset mails,
+codes, contracts), the attack needs only that the message is opened, and the e-mail arrives through the normal channel
+and can be addressed to a chosen person. XSS on an ordinary website is limited to what that site holds and usually needs
+the victim to be lured to a particular URL.
+
+\paragraph{(c) What the payloads did, what persists, and a Content Security Policy.} The SpyPress payloads
+\cite{eset}: stole credentials (through hidden input fields; the Roundcube payload also logged the user out through a
+hidden iframe to force a fresh login); copied the address book and, for Roundcube, the version and plug-in list; sent
+mail in batches (Roundcube every 7200~s, up to 150 messages per run; Zimbra the first 80 messages of each folder every
+14\,400~s); copied contacts and the \code{ZmSetting} configuration (Zimbra); in MDaemon also the login history, the whole mailbox,
+the \textbf{2FA secret} and an \textbf{App Password}.
+
+Two changes let the attacker keep access after the victim changed the password or cleaned the browser:
+\begin{enumerate}[label=(\arabic*)]
+\item \textbf{The Sieve forwarding rule} (Roundcube, in some samples): a server-side rule sends a copy of every
+incoming message to an attacker's address \cite{eset}. It runs inside the mail server on delivery and does not depend on
+the browser, the session or the script still running.
+\item \textbf{The MDaemon App Password and the stolen 2FA secret}: an App Password is a separate credential meant to
+work ``without having to enter the 2FA code'', and the 2FA secret is equivalent to the QR code, so the attacker can enrol their
+own authenticator \cite{eset}.
+\end{enumerate}
+A password change does not help because neither item is the password: the rule is configuration stored on the server, the
+App Password is a second, independent secret, and the 2FA secret keeps producing valid codes. (ESET states that the items
+survive browser clean-up; that a password change alone does not revoke them is my inference from how these features work.
+The remedy is to delete the rule, revoke app passwords and re-enrol 2FA.)
+
+A proposed policy for a webmail application (HTTP response header; a fresh nonce is generated for every response), with the
+effect of each directive as defined by MDN \cite{mdn}:
+\begin{Verbatim}[fontsize=\footnotesize, frame=single]
+Content-Security-Policy: default-src 'none'; script-src 'self' 'nonce-<random>';
+  style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self';
+  base-uri 'none'; object-src 'none'; frame-ancestors 'self'
+\end{Verbatim}
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}P{3.4cm}LL@{}}
+\toprule
+Directive & Effect (MDN) & Which part of the attack it blocks \\
+\midrule
+\code{script-src 'self' 'nonce-...'} (no \code{'unsafe-inline'}) & inline scripts and inline event handlers do not run
+unless they carry the nonce & the initial execution in all four products: injected \code{<script>} text, \code{onerror=} on an
+\code{img}, the payload loaded from the calendar header \\
+\code{default-src 'none'} & fallback: every fetch type not listed is blocked & anything the policy forgot \\
+\code{connect-src 'self'} & \code{fetch}/XHR/WebSocket only to the same origin & the HTTPS POSTs that carried credentials, contacts and mail to the
+attacker's server \\
+\code{form-action 'self'} & forms may be submitted only to the same origin & a fake login form, or hidden inputs, posting
+credentials elsewhere \\
+\code{img-src 'self' data:} & images only from the same origin & image-request exfiltration (a remote-image proxy is needed for mail images) \\
+\code{base-uri 'none'}, \code{object-src 'none'} & no \code{<base>} element; no \code{<object>}/\code{<embed>} & rewriting of relative URLs; plug-in content \\
+\code{frame-ancestors 'self'} & the page may be framed only by itself & hostile pages that embed the mail interface \\
+\bottomrule
+\end{tabularx}
+\caption{The proposed policy and what each directive stops. It was not tested against a real webmail product.}\label{tab:csp}
+\end{table}
+A CSP does not replace fixing the sanitiser: if script did run, same-origin actions (creating a Sieve rule) would still work.
+It makes the injected script unable to start in the first place, and it limits where stolen data can go. It is best
+deployed first as \code{Content-Security-Policy-Report-Only} so that breakage is found before it is enforced.
+
+%=====================================================================
+\section*{2.3 Firewalls and Intrusion Detection}
+
+\subsection*{Question 5 --- A forged key and a custom alert (2023)}
+
+\paragraph{(a) Who, what, when.} The \textbf{cloud provider} is Microsoft (Exchange Online and Outlook.com). The
+\textbf{threat actor} is Storm-0558, assessed by Microsoft with moderate confidence to be China-based with
+espionage objectives (Microsoft now tracks it as Antique Typhoon) \cite{msanalysis}. The \textbf{department that detected the intrusion} is the
+U.S.\ \textbf{Department of State}, and the \textbf{review board} is the \textbf{Cyber Safety Review Board (CSRB)}, which
+reviewed the intrusion at the request of the Secretary of Homeland Security and found it ``preventable and should never have
+occurred'' \cite{csrb}. The actor reached the mailboxes of 22 organisations and 503 related personal accounts, among them the
+Commerce Secretary and the U.S.\ Ambassador to China; about 60\,000 e-mails were taken from the State Department alone \cite{csrb}.
+\begin{table}[H]
+\centering\small
+\begin{tabular}{@{}llP{10.6cm}@{}}
+\toprule
+\# & Date (UTC) & Event \\
+\midrule
+1 & 2016 & Microsoft creates the consumer (MSA) signing key later forged; it should have been retired in March 2021, but
+retirement was delayed \cite{csrb} \\
+2 & 15 May 2023 & intrusion start: Storm-0558 gains access to e-mail accounts using forged tokens \cite{csrb,msanalysis} \\
+3 & 15 Jun.\ 2023 & the State Department's security operations centre detects anomalous access to its mail systems \cite{csrb} \\
+4 & 16 Jun.\ 2023 & the custom ``Big Yellow Taxi'' alerts are reviewed; State notifies Microsoft \cite{csrb,msanalysis} \\
+5 & 11 Jul.\ 2023 & \textbf{Microsoft's first disclosure} of the intrusion (MSRC and ``Microsoft on the Issues'' blogs) \cite{msanalysis} \\
+6 & 6 Sep.\ 2023 & \textbf{Microsoft's explanation} of how the key was stolen: a 2021 crash dump moved to a debugging
+environment \cite{mskey} \\
+7 & 12 Mar.\ 2024 & \textbf{the correction}: Microsoft has found no crash dump containing the key; it does not know how
+the key was obtained \cite{mskey,csrb} \\
+8 & 20 Mar.\ 2024 & date of the CSRB report \cite{csrb} \\
+\bottomrule
+\end{tabular}
+\caption{Timeline of the Storm-0558 intrusion (gaps computed in Appendix~A.3: 31 days from intrusion to detection, 26 days from detection to
+disclosure, 188 days from the inaccurate blog to its correction).}\label{tab:q5time}
+\end{table}
+The CSRB also notes that Microsoft acknowledged to the Board in November 2023 that the September post was inaccurate, but
+corrected it only on 12 March 2024, ``after the Board's repeated questioning'' \cite{csrb}. The window of compromise
+may have started earlier than 15~May because of the standard 30-day log retention \cite{csrb}.
+
+\paragraph{(b) How the State Department detected it, and the authentication failure.} State's SOC ran a custom alert rule,
+named \textbf{``Big Yellow Taxi''}, over the \textbf{\code{MailItemsAccessed}} audit log, which records access to Exchange Online
+mailboxes. The rule enumerated the applications accessing mailboxes, compared them with a baseline, and alerted when an
+application ID that did not normally touch mailboxes appeared; the same data was used in CISA's detection guidance, which
+asked for unexpected \code{MailItemsAccessed} events with irregular application IDs \cite{csrb,cisa193}. The activity could look
+normal, and State had seen false alarms from this rule before, but it investigated and found the intrusion \cite{csrb}.
+
+\emph{Why other victims did not see it:} \code{MailItemsAccessed} is part of Microsoft Purview Audit (Premium), available through
+the G5/E5 licences. State had bought the government G5 licence; the Board found that few, if any, other victims had the
+enhanced logging, and that even then few organisations analyse the voluminous log in detail \cite{csrb}.
+
+\emph{Signature-based or anomaly-based?} The detection is \textbf{anomaly-based}: it does not look for a known attack pattern
+or indicator, it compares mailbox access with a learned baseline of normal applications (the rule is hand-written, but what it
+detects is a deviation, and State built it from three years of experience of anomalous mailbox access) \cite{csrb}.
+
+\emph{The authentication failure.} The key that was stolen was a \textbf{Microsoft account (MSA) consumer signing key},
+created in \textbf{2016}, so about seven years old, and two years past its planned retirement in March 2021; Microsoft had stopped
+rotating consumer keys in 2021 and had no automatic alert on the age of active keys \cite{csrb}. Such a key should have been
+able to sign only tokens for consumer Outlook. It worked for enterprise mailboxes because of a \textbf{token validation flaw}:
+Microsoft had introduced a common OpenID Connect endpoint that lists the signing keys of both the consumer and the enterprise
+identity systems, but had not updated its SDKs to tell the two kinds of key apart, so Exchange Online accepted a token signed
+with the consumer key for an enterprise account \cite{csrb,mskey}. Together, the old key and the missing check gave
+``full access to essentially any Exchange Online account'' \cite{csrb}.
+
+\paragraph{(c) Base rate.} A monitoring system sees $5\times10^{7}$ events per day, one in $10^{6}$ is malicious, the detection
+rate is $\mathrm{TPR}=0.95$, the false positive rate is $\mathrm{FPR}=10^{-3}$, and an analyst investigates 60 alerts per day
+(\code{q5\_base\_rate.py}, Appendix~A.2). Let $p=10^{-6}$ and $N=5\times10^{7}$.
+\begin{table}[H]
+\centering\small
+\begin{tabular}{@{}lrl@{}}
+\toprule
+Quantity & Value & Calculation \\
+\midrule
+malicious events per day & $50$ & $N\,p$ \\
+true alerts & $47.5$ & $N\,p\cdot\mathrm{TPR}$ \\
+false alerts & $49\,999.95$ & $N(1-p)\cdot\mathrm{FPR}$ \\
+\textbf{alerts per day} & $\mathbf{50\,047.45}$ & $47.5+49\,999.95$ \\
+$P(\text{attack}\mid\text{alert})$ & $9.49\times10^{-4}\approx0.095\%$ & $47.5/50\,047.45$, one alert in 1054 is real \\
+\textbf{analysts needed} & $\mathbf{835}$ & $50\,047.45/60=834.1$, rounded up \\
+\bottomrule
+\end{tabular}
+\caption{Alerts, precision and staffing for the general detector.}
+\end{table}
+The same $P$ follows from Bayes' formula $\frac{\mathrm{TPR}\,p}{\mathrm{TPR}\,p+\mathrm{FPR}\,(1-p)}$ (Appendix~A.2). Although 95\% of the attacks are
+detected, more than 99.9\% of the alerts are false: the 50 million harmless events multiplied by even a tiny FPR outnumber the
+50 real attacks by a thousand to one (the base-rate fallacy). A narrow rule can work better because it attacks exactly this
+term. A rule that looks for one pattern only, such as an application ID that has never accessed a mailbox before, may miss many
+attacks (lower TPR) but produces almost no false alerts (very low FPR), so analysts spend their 60 alerts a day on mostly real
+events. With the illustrative, assumed values $\mathrm{TPR}=0.6$ and $\mathrm{FPR}=10^{-6}$ the script gives 80 alerts per day,
+$P=37.5\%$ and 2 analysts. This is what State's rule did: it was written for one threat, tuned over three years, and was
+therefore small enough to triage \cite{csrb}.
+
+%=====================================================================
+\section*{2.4 Authentication Protocols}
+
+\subsection*{Question 6 --- Half a second too slow: the backdoor in SSH (2024)}
+
+\paragraph{(a) The post, the library, the distributions, the timeline.} On 29~March~2024 (08:51 UTC$-$7) the software engineer
+Andres Freund posted \emph{``backdoor in upstream xz/liblzma leading to ssh server compromise''} to the public oss-security
+list \cite{freund}. The library is \textbf{liblzma} of \textbf{XZ Utils}, versions \textbf{5.6.0} and \textbf{5.6.1}; the
+vulnerability is \textbf{CVE-2024-3094} (CVSS~v3 10.0, critical) \cite{nvd}, and CISA advised downgrading to 5.4.6 \cite{cisaxz}.
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}P{3.4cm}L@{}}
+\toprule
+Distribution & Version or channel that shipped the backdoored package \\
+\midrule
+Debian & unstable (5.6.0-0.1 added 26 Feb.\ 2024; 5.6.1 on 27 Mar.), testing (from 5 Mar.), rolled back on 28 Mar.; stable (bookworm) not affected
+\cite{cox,debian} \\
+Fedora & Rawhide (5.6.0 or 5.6.1) and the Fedora~40 beta (xz-libs 5.6.0-1.fc40 and 5.6.0-2.fc40); no RHEL version \cite{redhat} \\
+openSUSE & Tumbleweed and MicroOS, 7--28 March 2024 \cite{suse} \\
+Kali Linux & xz-utils 5.6.0-0.2, available 26--29 March 2024 \cite{kali} \\
+\bottomrule
+\end{tabularx}
+\caption{Distributions that shipped the backdoored xz (rolling and pre-release channels).}\label{tab:distros}
+\end{table}
+\begin{table}[H]
+\centering\small
+\begin{tabular}{@{}llP{10.6cm}@{}}
+\toprule
+\# & Date & Event \\
+\midrule
+1 & 29 Oct.\ 2021 & first contribution by ``Jia Tan'' to xz-devel, a harmless \code{.editorconfig} patch \cite{cox} \\
+2 & 22 Apr.\ 2022 & first of the pressure e-mails to the maintainer, Lasse Collin (from ``Jigar Kumar'', later ``Dennis Ens'') \cite{cox} \\
+3 & 29 Jun.\ 2022 & Collin calls Jia Tan ``practically a co-maintainer already'' \cite{cox} \\
+4 & 28 Oct.\ 2022 & Jia Tan is added to the Tukaani GitHub organisation; direct commit access follows on 30 Dec.\ \cite{cox} \\
+5 & 18 Mar.\ 2023 & Jia Tan tags the first release, v5.4.2 \cite{cox} \\
+6 & 23--24 Feb.\ 2024 & the backdoor is merged into binary test files; v5.6.0 is released with the malicious
+\code{build-to-host.m4} in its tarball \cite{cox} \\
+7 & 9 Mar.\ 2024 & v5.6.1 is released \cite{cox} \\
+8 & 28 Mar.\ 2024 & Freund finds the backdoor and tells Debian and distros@openwall privately \cite{cox} \\
+9 & 29 Mar.\ 2024 & public disclosure on oss-security; CVE-2024-3094 \cite{freund,nvd} \\
+\bottomrule
+\end{tabular}
+\caption{Timeline of the contributor's involvement (Appendix~A.3: 882 days, 2.4 years, from the first contribution to the
+disclosure; 34 days from the backdoored release to the disclosure).}\label{tab:xztime}
+\end{table}
+
+\paragraph{(b) How code in a compression library ended up inside the SSH server.}
+\begin{table}[H]
+\centering\small
+\begin{tabular}{@{}lP{3.2cm}P{9.6cm}@{}}
+\toprule
+\# & Stage & What happens \cite{freund,cox} \\
+\midrule
+1 & release tarball & the tarball of 5.6.0/5.6.1 contains a modified \code{m4/build-to-host.m4} that is \emph{not} in the git repository \\
+2 & build script & \code{configure} runs the macro; it decodes the test file \code{bad-3-corrupt\_lzma2.xz} into a script, which decodes
+\code{good-large\_compressed.lzma} and extracts an object file; it acts only for x86-64 Linux, GCC with GNU \code{ld} and a Debian or RPM build \\
+3 & library & the object (\code{liblzma\_la-crc64-fast.o}) is linked into \code{liblzma.so}; it replaces the IFUNC resolvers \code{crc32\_resolve()} and
+\code{crc64\_resolve()} \\
+4 & distribution patch & Debian and several other distributions patch OpenSSH's \code{sshd} for systemd notification; the patch links \code{libsystemd}, which depends on \code{liblzma} \\
+5 & SSH server start & \code{sshd} loads \code{liblzma}; because it is built with \code{-Wl,-z,now}, the resolvers run at once and install an audit hook in the dynamic linker \\
+6 & redirected function & when \code{RSA\_public\_decrypt@plt} is resolved, the hook points its GOT entry (still writable at that moment) into the backdoor \\
+7 & public-key login & \code{ssh\_rsa\_verify} calls the redirected \code{RSA\_public\_decrypt}, which runs the backdoor's check and then calls back into libcrypto \\
+\bottomrule
+\end{tabular}
+\caption{The chain of Figure~\ref{fig:xz} in words.}\label{tab:xzchain}
+\end{table}
+\begin{figure}[H]
+\centering
+\IfFileExists{figures/xz_chain_hand_drawn.jpg}{%
+  \includegraphics[width=0.92\linewidth]{figures/xz_chain_hand_drawn.jpg}}{%
+  \fbox{\parbox[c][4.2cm][c]{0.88\linewidth}{\centering\textbf{Place for the hand-drawn diagram (photo).}\\[0.5em]
+  Save the photograph as \code{figures/xz\_chain\_hand\_drawn.jpg} and rebuild.\\[0.3em]
+  Draw the seven steps of Table~\ref{tab:xzchain} as boxes joined by arrows:\\
+  release tarball $\rightarrow$ build script $\rightarrow$ liblzma $\rightarrow$ libsystemd $\rightarrow$ sshd
+  $\rightarrow$ redirected \code{RSA\_public\_decrypt}.}}}
+\caption{The chain from the xz release tarball to the SSH server (the sheet asks for a drawing made by hand).}\label{fig:xz}
+\end{figure}
+\emph{Why the malicious code was in the release tarballs but not in the visible repository.} Distributions build from the
+\emph{release tarball} that the maintainer uploads, not from the git tree. The macro that unpacks the payload was added only to
+that tarball; the GitHub ``source code'' archives, generated from the repository, do not contain it \cite{freund}. The payload
+itself sat in the repository, but disguised as two binary test files (\code{bad-3-corrupt\_lzma2.xz} and
+\code{good-large\_compressed.lzma}) that nothing used as tests \cite{freund}. A reviewer reading the repository would see neither the
+trigger nor an obviously malicious file.
+
+\paragraph{(c) The authentication protocol, the function, and the violated assumption.} SSH public-key authentication is a
+challenge--response protocol: the server asks the client to sign data that includes the session identifier, and the client answers
+with a signature made with its private key. The server \emph{verifies} the signature with the user's public key. For an RSA key
+\code{ssh\_rsa\_verify} does this through \code{RSA\_public\_decrypt}, which recovers the signed digest from the signature so that
+it can be compared \cite{freund}. This is the function the backdoor redirects.
+
+\emph{What the backdoor checked before acting.} Freund himself had not yet worked out what the injected code checks; he
+suspected some form of access in a pre-authentication context \cite{freund}. A preliminary analysis by F.~Valsorda, reposted
+to oss-security, describes it: the payload is taken from the $N$ value of the RSA public key passed to
+\code{RSA\_public\_decrypt}, which an attacker controls before authentication through an OpenSSH certificate (a certificate
+carries the signer's public key); it is checked against a simple fingerprint, decrypted with a fixed ChaCha20 key, and its
+signature is verified with a fixed Ed448 key; only then is the command handed to \code{system()}. If the payload is malformed or the
+signature does not verify, the backdoor reverts to normal operation, so every legitimate login works as before
+\cite{patrakov}. It also acts only when the process is \code{/usr/sbin/sshd} with \code{TERM} unset, and it appears to detect
+\code{rr} and, in some cases, \code{gdb} \cite{freund}. Only the holder of the attacker's private key can use it, which makes
+it a gated remote-code-execution backdoor, not a password bypass.
+
+\emph{Why this is not a weakness of the protocol.} The protocol and its cryptography were not broken: an attacker who did not
+have the matching private key could not forge a signature against an honest verifier. The attack \emph{replaced the verifier's code}
+and so bypassed the protocol instead of attacking it. \emph{The assumption violated} is the one every authentication protocol
+makes about its endpoints: that each party runs the genuine, unmodified implementation of the protocol on a platform it can
+trust, so that the check it appears to perform is the check that is performed. A supply-chain compromise breaks exactly that
+assumption, which is why the best protocol cannot compensate for it.
+
+\paragraph{(d) The anomaly, and controls.} The discovery was a form of human anomaly detection \cite{freund}. Freund saw that SSH
+logins on his Debian unstable test system used a lot of CPU and were slow: \code{time ssh nonexistant@localhost} took 0.299\,s
+before and 0.807\,s with the backdoored library, and \code{sshd -h} took about 0.5\,s instead of 0.01\,s, with the user and system
+time unchanged. \code{valgrind} reported errors in some configurations (the injected code expected a different stack layout; 5.6.1 was a
+workaround). He then used \code{perf record -e intel\_pt//ub} to find where execution diverged with and without the library and
+\code{gdb} breakpoints before the divergence \cite{freund}.
+
+Three controls that would make such an attack harder, with evidence from the incident:
+\begin{enumerate}[label=(\arabic*)]
+\item \textbf{Technical: build from the signed git tag, or build reproducibly, and compare the release tarball with the repository.}
+The malicious macro existed only in the tarball \cite{freund}. A check that a tarball equals \code{git archive} of its tag (apart
+from listed generated files) would have flagged \code{build-to-host.m4}; Arch Linux changed its package to build from git on
+28~March \cite{cox}.
+\item \textbf{Technical: remove unneeded dependencies from the authentication daemon, and keep performance tests in the pipeline.}
+\code{sshd} was reachable only because distribution patches pulled in \code{libsystemd}, and with it \code{liblzma}
+\cite{freund}; since OpenSSH~9.8 systemd notification has a standalone implementation that does not depend on \code{libsystemd}
+\cite{openssh98}. The slowdown (0.3\,s to 0.8\,s)
+shows that a regression test on login time would also have caught it.
+\item \textbf{Non-technical: governance of maintainers.} The campaign worked on a single maintainer under pressure: e-mails
+from newly appearing accounts started 175 days after the first contribution, and the contributor was a ``practically a
+co-maintainer'' after 243 days \cite{cox}. Two-person review and release signing, shared maintainership, and support for
+maintainers (funding, rest) reduce the effect of social pressure.
+\end{enumerate}
+
+%=====================================================================
+\section*{Conclusion}
+The four incidents share one pattern: the attacker spent very little (a 60-byte request, one e-mail, one stolen key, two years of
+patience) and the defender's cost was large (a 201 million requests/s flood, mailboxes read for six weeks, 50\,000 false alerts a
+day). In every case a precise defence existed and was cheap compared with the damage: bound the \emph{work} a reset stream
+can cause, execute no inline script, validate the issuer and scope of every key, and build only what the repository contains.
+
+\clearpage
+\begin{thebibliography}{99}
+\footnotesize\setlength{\itemsep}{1pt}\setlength{\parsep}{0pt}\setlength{\parskip}{0pt}
+
+\bibitem{stamp}
+M.~Stamp, \emph{Information Security: Principles and Practice}, 3rd~ed. Hoboken, NJ, USA: Wiley, 2022, chs.~8--9.
+
+\bibitem{nvd}
+National Institute of Standards and Technology, ``National Vulnerability Database: CVE-2023-44487, CVE-2020-35730, CVE-2023-43770,
+CVE-2024-11182, CVE-2024-27443, CVE-2024-3094.'' [Online]. Available: \url{https://nvd.nist.gov/vuln/detail/CVE-2023-44487} (and the same path
+for the other identifiers) (accessed Nov.~17, 2026).
+
+\bibitem{cfzero}
+Cloudflare, ``HTTP/2 Zero-Day vulnerability results in record-breaking DDoS attacks,'' Cloudflare Blog, Oct.~10, 2023. [Online]. Available:
+\url{https://blog.cloudflare.com/zero-day-rapid-reset-http2-record-breaking-ddos-attack/} (accessed Nov.~17, 2026).
+
+\bibitem{cftech}
+Cloudflare, ``HTTP/2 Rapid Reset: Deconstructing the record-breaking attack,'' Cloudflare Blog, Oct.~10, 2023. [Online]. Available:
+\url{https://blog.cloudflare.com/technical-breakdown-http2-rapid-reset-ddos-attack/} (accessed Nov.~17, 2026).
+
+\bibitem{googlehow}
+Google Cloud, ``How it works: The novel HTTP/2 `Rapid Reset' DDoS attack,'' Google Cloud Blog, Oct.~10, 2023. [Online]. Available:
+\url{https://cloud.google.com/blog/products/identity-security/how-it-works-the-novel-http2-rapid-reset-ddos-attack} (accessed Nov.~17, 2026).
+
+\bibitem{google398}
+Google Cloud, ``Google Cloud mitigated largest DDoS attack, peaking above 398 million rps,'' Google Cloud Blog, Oct.~10, 2023. [Online]. Available:
+\url{https://cloud.google.com/blog/products/identity-security/google-cloud-mitigated-largest-ddos-attack-peaking-above-398-million-rps} (accessed Nov.~17, 2026).
+
+\bibitem{aws}
+T.~Scholl and M.~Ryland, ``How AWS protects customers from DDoS events,'' AWS Security Blog, Oct.~10, 2023. [Online]. Available:
+\url{https://aws.amazon.com/blogs/security/how-aws-protects-customers-from-ddos-events/} (accessed Nov.~17, 2026).
+
+\bibitem{cf71}
+Cloudflare, ``Cloudflare mitigates record-breaking 71 million request-per-second DDoS attack,'' Cloudflare Blog, Feb.~13, 2023. [Online]. Available:
+\url{https://blog.cloudflare.com/cloudflare-mitigates-record-breaking-71-million-request-per-second-ddos-attack/} (accessed Nov.~17, 2026).
+
+\bibitem{rfc9113}
+M.~Thomson and C.~Benfield, ``HTTP/2,'' IETF RFC~9113, Jun.~2022, \S5.1.2. [Online]. Available: \url{https://www.rfc-editor.org/rfc/rfc9113}
+
+\bibitem{godb}
+Go Project, ``GO-2023-2102: Excessive resource consumption by rapid HTTP/2 stream resets (CVE-2023-39325),'' Go Vulnerability Database, Oct.~2023. [Online]. Available:
+\url{https://pkg.go.dev/vuln/GO-2023-2102} (accessed Nov.~17, 2026).
+
+\bibitem{eset}
+M.~Faou, ``Operation RoundPress targeting high-value webmail servers,'' ESET Research, WeLiveSecurity, May~15, 2025. [Online]. Available:
+\url{https://www.welivesecurity.com/en/eset-research/operation-roundpress/} (accessed Nov.~17, 2026).
+
+\bibitem{mdn}
+MDN Web Docs, ``Content Security Policy (CSP),'' Mozilla. [Online]. Available:
+\url{https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP} (accessed Nov.~17, 2026).
+
+\bibitem{msanalysis}
+Microsoft Threat Intelligence, ``Analysis of Storm-0558 techniques for unauthorized email access,'' Microsoft Security Blog, Jul.~14, 2023 (updated Aug.~2024). [Online]. Available:
+\url{https://www.microsoft.com/en-us/security/blog/2023/07/14/analysis-of-storm-0558-techniques-for-unauthorized-email-access/} (accessed Nov.~17, 2026).
+
+\bibitem{csrb}
+Cyber Safety Review Board, ``Review of the Summer 2023 Microsoft Exchange Online Intrusion,'' U.S.\ Dept.\ Homeland Security, Mar.~20, 2024. [Online]. Available:
+\url{https://www.cisa.gov/sites/default/files/2025-03/CSRBReviewOfTheSummer2023MEOIntrusion508.pdf} (accessed Nov.~17, 2026).
+
+\bibitem{mskey}
+Microsoft Security Response Center, ``Results of major technical investigations for Storm-0558 key acquisition,'' Sep.~6, 2023 (updated Mar.~12, 2024). [Online]. Available:
+\url{https://www.microsoft.com/en-us/msrc/blog/2023/09/results-of-major-technical-investigations-for-storm-0558-key-acquisition} (accessed Nov.~17, 2026).
+
+\bibitem{cisa193}
+Cybersecurity and Infrastructure Security Agency and Federal Bureau of Investigation, ``Enhanced monitoring to detect APT activity targeting Outlook Online,'' Alert AA23-193A, Jul.~12, 2023. [Online]. Available:
+\url{https://www.cisa.gov/news-events/cybersecurity-advisories/aa23-193a} (accessed Nov.~17, 2026).
+
+\bibitem{freund}
+A.~Freund, ``backdoor in upstream xz/liblzma leading to ssh server compromise,'' oss-security mailing list, Mar.~29, 2024. [Online]. Available:
+\url{https://www.openwall.com/lists/oss-security/2024/03/29/4} (accessed Nov.~17, 2026).
+
+\bibitem{cisaxz}
+Cybersecurity and Infrastructure Security Agency, ``Reported supply chain compromise affecting XZ Utils data compression library, CVE-2024-3094,'' Alert, Mar.~29, 2024. [Online]. Available:
+\url{https://www.cisa.gov/news-events/alerts/2024/03/29/reported-supply-chain-compromise-affecting-xz-utils-data-compression-library-cve-2024-3094} (accessed Nov.~17, 2026).
+
+\bibitem{cox}
+R.~Cox, ``Timeline of the xz open source attack,'' research!rsc, 2024. [Online]. Available: \url{https://research.swtch.com/xz-timeline} (accessed Nov.~17, 2026).
+
+\bibitem{debian}
+Debian Security Team, ``CVE-2024-3094,'' Debian Security Tracker. [Online]. Available:
+\url{https://security-tracker.debian.org/tracker/CVE-2024-3094} (accessed Nov.~17, 2026).
+
+\bibitem{redhat}
+Red Hat, ``Urgent security alert for Fedora 40 and Fedora Rawhide users,'' Red Hat Blog, Mar.~29, 2024 (updated Mar.~30, 2024). [Online]. Available:
+\url{https://www.redhat.com/en/blog/urgent-security-alert-fedora-41-and-rawhide-users} (accessed Nov.~17, 2026).
+
+\bibitem{suse}
+M.~Meissner, ``openSUSE addresses supply chain attack against xz compression library,'' openSUSE News, Mar.~29, 2024. [Online]. Available:
+\url{https://news.opensuse.org/2024/03/29/xz-backdoor/} (accessed Nov.~17, 2026).
+
+\bibitem{kali}
+Kali Linux, ``All about the xz-utils backdoor,'' Kali Linux Blog, Mar.~29, 2024. [Online]. Available:
+\url{https://www.kali.org/blog/about-the-xz-backdoor/} (accessed Nov.~17, 2026).
+
+\bibitem{patrakov}
+A.~E.~Patrakov (quoting F.~Valsorda's preliminary analysis), ``Re: backdoor in upstream xz/liblzma leading to ssh server compromise,'' oss-security mailing list, Mar.~31, 2024. [Online]. Available:
+\url{https://www.openwall.com/lists/oss-security/2024/03/30/36} (accessed Nov.~17, 2026).
+
+\bibitem{openssh98}
+OpenSSH Project, ``OpenSSH 9.8 release notes,'' 2024. [Online]. Available: \url{https://www.openssh.org/txt/release-9.8} (accessed Nov.~17, 2026).
+\end{thebibliography}
+
+\clearpage
+\section*{Appendix A --- Python Verification: Chosen Values and Outputs}
+The scripts are in the repository \url{https://github.com/Diellart-Mulolli/network_lab} (see its README for the running guide)
+and use only the Python~3 standard library. They were run with Python~3.12.3; the outputs below are included from the
+files in \code{outputs/} and are unchanged. Key results were checked a second way: the bandwidth figures of Question~2 in two
+orders (total first, per bot first), the stream model against its closed forms, and the base-rate of Question~5 by counting
+events and by Bayes' formula.
+
+\needspace{13cm}
+\subsection*{A.1 \texttt{q2\_rapid\_reset.py} (Question 2)}
+Chosen values: peak $201\times10^{6}$ requests/s, previous record $71\times10^{6}$, 20\,000 bots, 60 bytes per cancelled
+request, 20\,000 bytes per response, stream limit 100, round-trip time 50\,ms. Command: \texttt{python3 q2\_rapid\_reset.py}
+\VerbatimInput[fontsize=\footnotesize, frame=single]{outputs/q2_rapid_reset.txt}
+\textbf{Check.} The factor 2.83, 10\,050 requests/s per bot, 96.48\,Gbit/s and 4.824\,Mbit/s, 32.16\,Tbit/s and 1.608\,Gbit/s agree
+with Question~2(a) and 2(c); the totals computed per bot equal those computed in total; the stream model reproduces the closed forms
+$100/0.05=2000$ and $4.824\cdot10^{6}/480=10\,050$.
+
+\needspace{15cm}
+\subsection*{A.2 \texttt{q5\_base\_rate.py} (Question 5(c))}
+Chosen values: $N=5\times10^{7}$ events/day, $p=10^{-6}$, TPR 0.95, FPR $10^{-3}$, 60 alerts per analyst per day; the narrow-rule
+example uses TPR 0.6 and FPR $10^{-6}$ (assumed, for illustration). Command: \texttt{python3 q5\_base\_rate.py}
+\VerbatimInput[fontsize=\footnotesize, frame=single]{outputs/q5_base_rate.txt}
+\textbf{Check.} 50\,047.45 alerts per day, $P(\text{attack}\mid\text{alert})=9.49\times10^{-4}$ and 835 analysts agree with
+Question~5(c); the counting method and Bayes' formula give the same probability (difference 0.0).
+
+\clearpage
+\needspace{21cm}
+\subsection*{A.3 \texttt{timelines.py} (Questions 5 and 6)}
+Chosen values: the dated events of Tables~\ref{tab:q5time} and~\ref{tab:xztime} and the exposure windows of
+Table~\ref{tab:distros}. Command: \texttt{python3 timelines.py}
+\VerbatimInput[fontsize=\footnotesize, frame=single]{outputs/timelines.txt}
+\textbf{Check.} The gaps quoted in the report (31, 26 and 188 days for Question~5; 882 days, 343 days and 34 days for
+Question~6) are those printed here.
+
+\end{document}
