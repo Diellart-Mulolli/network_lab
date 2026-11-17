@@ -1,3 +1,38 @@
+Question 1: the Orange Espana RIPE NCC account hijack (3 January 2024)
+  date and time (UTC)  +hours   total  event
+  2024-01-03 09:28       0.0     0.0  attacker starts publishing and revoking ROAs
+  2024-01-03 09:42       0.2     0.2  AS12479 ROAs published (incl. a /16 with maxLength 16)
+  2024-01-03 14:20       4.6     4.9  AS49581 ROAs for two /12s: over 1000 routes Invalid
+  2024-01-03 18:00       3.7     8.5  Orange regains the account, publishes ROAs (before 18:00)
+  2024-01-04 00:00       6.0    14.5  over a thousand AS12479 routes still RPKI-invalid (APNIC)
+  2024-01-08 16:00     112.0   126.5  Orange raises maxLength of the /12s and the /16 to 24
+  2024-01-10 12:22      44.4   170.9  RIPE NCC: 2FA to become mandatory (13:22 CET)
+  2024-01-26 00:00     371.6   542.5  APNIC blog: Madory's (Kentik) analysis
+  2024-05-13 00:00    2592.0  3134.5  RIPE NCC Access security investigation report
+
+selected intervals (Question 1)
+  first ROA activity to Orange regaining control: 09:28 -> 18:00 = 8.5 h
+  attack ROAs of 14:20 to recovery (traffic drop 14:20 to about 18:00): 3.7 h
+  14:20 on 3 Jan. to the maxLength fix on 8 Jan.: 5.07 days
+
+Question 4: the Cisco ASA/FTD campaigns (ArcaneDoor 2023-2024, ED 25-03 in 2025)
+  date        +days  total  event
+  ~2023-07        0      0  ArcaneDoor capability tested, as early as (Talos)
+  ~2023-11      123    123  actor infrastructure, early November (Talos)
+  ~2023-12       30    153  most ArcaneDoor activity, Dec. to early Jan. (Talos)
+  2024-04-24    145    298  Talos and Cisco publish ArcaneDoor; CVE-2024-20353, -20359
+  ~2025-05      372    670  Cisco called in to investigate government attacks (SecurityWeek)
+  2025-09-25    147    817  ED 25-03; Cisco advisories, CVE-2025-20333 and -20362
+  2025-09-26      1    818  ED 25-03: core dumps and updates due, 11:59 PM
+  2025-09-30      4    822  ED 25-03: end-of-support ASA hardware disconnected
+  2025-10-02      2    824  ED 25-03: complete inventory due, 11:59 PM
+
+selected intervals (Question 4)
+  ArcaneDoor publication to ED 25-03: 2024-04-24 -> 2025-09-25 = 519 days (1.42 years)
+  first activity (~Jul 2023) to ED deadline: 2023-07-01 -> 2025-09-26 = 818 days (2.24 years)
+  directive issued to the core-dump deadline: 2025-09-25 -> 2025-09-26 = 1 day (0.00 years)
+  directive issued to the inventory deadline: 2025-09-25 -> 2025-10-02 = 7 days (0.02 years)
+
 Question 5: Storm-0558 and the Exchange Online intrusion
   date        +days  total  event
   2023-05-15      0      0  Storm-0558 gains access to email accounts (CSRB)

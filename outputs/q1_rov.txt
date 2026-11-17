@@ -1,0 +1,34 @@
+RFC 6811 validity of Orange's routes (origin AS12479) in each phase
+  Valid = a ROA covers the prefix, allows its length and names the origin AS
+  Invalid = covered by a ROA, but none matches (wrong AS or longer than maxLength)
+  NotFound = no ROA covers the prefix
+
+  route                    phase 0       phase 1       phase 2       phase 3
+  85.48.0.0/12            NotFound       Invalid         Valid         Valid
+  85.48.12.0/24           NotFound       Invalid       Invalid         Valid
+  90.163.112.0/24         NotFound       Invalid       Invalid         Valid
+  62.36.0.0/16            NotFound       Invalid         Valid         Valid
+  62.36.13.0/24           NotFound       Invalid       Invalid         Valid
+
+  phase 0  before: no ROA for these prefixes (the account had never created one)
+  phase 1  14:20 UTC: attacker's ROAs with origin AS49581 (the two /12s, plus the earlier /16)
+  phase 2  ~18:00 UTC: Orange regains the account: AS12479 ROAs, maxLength = prefix length
+  phase 3  8 Jan 16:00 UTC: Orange raises the maxLength to 24
+
+Why only networks that do route origin validation (ROV) lost the routes
+  an ROV network drops 'Invalid' routes; a network without ROV accepts every route.
+  in phase 1 every Orange route is Invalid, so ROV networks drop it and the others keep it;
+  Kentik: when a route is evaluated as Invalid, its propagation is cut in half or more.
+
+What the same ROAs allow the attacker (phase 1)
+  announcing 85.48.0.0/12 from AS49581: Valid  (the attacker's own ROA makes his route Valid)
+  announcing 85.48.0.0/12 from AS12479: Invalid
+
+Why some routes stayed Invalid until 8 January (phase 2)
+  85.48.12.0/24      /24 longer than maxLength 12 or 16: Invalid; with maxLength 24: Valid
+  90.163.112.0/24    /24 longer than maxLength 12 or 16: Invalid; with maxLength 24: Valid
+  62.36.13.0/24      /24 longer than maxLength 12 or 16: Invalid; with maxLength 24: Valid
+
+Size of the loss (Kentik / APNIC, 3-4 January 2024)
+  globally routed routes of AS12479: 9,200 -> 7,400 = -1,800 (19.6 %)
+  unique IPv4 addresses originated:  7 M -> 5 M = -2 M (28.6 %)
